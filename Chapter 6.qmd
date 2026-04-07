@@ -1,0 +1,783 @@
+---
+title: "Statistical Learning Analysis Report"
+subtitle: "Chapter 6: ISLR2 Exercise Solutions"
+author: "Shad Ali Shah and Atta ur rehman and Naveed"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    number-sections: true
+    number-depth: 3
+    code-fold: true
+    code-tools: true
+    code-summary: "Show code"
+    theme: cosmo
+    colorlinks: true
+    link-citations: true
+    df-print: kable
+    fig-cap-location: bottom
+    tbl-cap-location: top
+    crossref:
+      fig-title: "Figure"
+      tbl-title: "Table"
+      fig-prefix: "Fig."
+      tbl-prefix: "Table"
+execute:
+  echo: true
+  warning: false
+  message: false
+  error: true
+  cache: false
+  keep-going: true
+  fig-width: 6.5
+  fig-height: 4
+jupyter: python3
+---
+
+
+
+
+## Exercise 8
+
+### (a)
+
+```{python}
+import numpy as np
+import pandas as pd
+from matplotlib.pyplot import subplots
+from statsmodels.api import OLS
+import sklearn.model_selection as skm
+import sklearn.linear_model as skl
+from sklearn.preprocessing import StandardScaler
+from ISLP import load_data
+from ISLP.models import ModelSpec as MS
+from functools import partial
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
+from sklearn.cross_decomposition import PLSRegression
+from ISLP.models import \
+     (Stepwise,
+      sklearn_selected,
+      sklearn_selection_path)
+
+try:
+    from l0bnb import fit_path
+except ModuleNotFoundError:
+    print("Warning: l0bnb module not found. Install it with: pip install l0bnb")
+    fit_path = None
+
+from sklearn.model_selection import train_test_split
+```
+
+```{python}
+np.random.seed(100)
+n=100
+X=np.random.normal(loc=0,scale=1,size=n)
+epsilon=np.random.normal(loc=0,scale=1,size=n)
+```
+
+### (b)
+
+```{python}
+beta=np.array([0.2,1,1.5,4])
+Y=beta[0]+beta[1]*X+beta[2]*X**2+beta[3]*X**3+epsilon
+```
+
+### (c)
+
+```{python}
+Xs=pd.DataFrame({'X':X,'X2':X**2,'X3':X**3,'X4':X**4,'X5':X**5,'X6':X**6,'X7':X**7,'X8':X**8
+                ,'X9':X**9,'X10':X**10})
+Ys=pd.DataFrame({'Y':Y})
+def nCp(sigma2, estimator, Xsigma, Ysigma):
+    "Negative Cp statistic"
+    n, p = Xsigma.shape
+    Yhat = estimator.predict(Xsigma)
+    RSS = np.sum((Ysigma - Yhat)**2)
+    return -(RSS + 2 * p * sigma2) / n #We look for the negative Cp since the sklearn methods try to 
+#maximize the ouputs
+#Let's now compute the residual variance sigma2. i.e, the variance of the residuals of 
+#the complete model
+design = MS(Xs).fit(Xs)
+Ysigma = np.array(Ys['Y'])
+Xsigma = design.transform(Xs)
+model=OLS(Ysigma,Xsigma).fit()
+sigma2 = model.scale#The result should be close enough to 1 because the beta 
+#coefficients are close too and the Xs columns are generated from a standard normal distribution
+
+#Now we should specify the strategy for the selection of the best model. For this we gonna use 
+#Stepwise.first_peak() method available in ISLP library
+strategy=Stepwise.first_peak(design,direction='forward',max_terms=len(design.terms))
+#Now it's time to fit a linear regression model using the strategy and the sklearn_selected() from
+#the ISLP.models package. But before we should freeze the first argument 
+neg_Cp = partial(nCp,sigma2) 
+Y_Cp= sklearn_selected(OLS,strategy,scoring=neg_Cp)
+Y_Cp.fit(Xsigma, Ysigma)
+Y_Cp.selected_state_
+```
+
+### (d)
+
+```{python}
+strategy_backward=Stepwise.first_peak(design,direction='backwards',max_terms=len(design.terms))
+neg_Cp1 = partial(nCp,sigma2) 
+Y_CpB= sklearn_selected(OLS,strategy_backward,scoring=neg_Cp1)
+Y_CpB.fit(Xsigma, Ysigma)
+Y_CpB.selected_state_
+```
+
+Logically we get the same results as for forward stepwise selection. As a reminder the choice of X, X2 and X3 does not mean that the related regression coefficients are significant as regularization methods merely suggest candidates for the optimal model.
+
+### (e)
+
+```{python}
+#No need to standardise Xs columns because they already stem from standard normal distribution
+D = design.fit_transform(Xs)
+X1 = np.asarray(D)
+# Since we want to use a Lasso model there is no need to specify a grid of lambdas. These will be
+# be generated automatically
+scaler = StandardScaler(with_mean=True,  with_std=True)
+K = 5
+kfold = skm.KFold(K,random_state=0,shuffle=True)
+lassoCV = skl.ElasticNetCV(n_alphas=100,l1_ratio=1,cv=kfold)
+pipeCV = Pipeline(steps=[('scaler', scaler),('lasso', lassoCV)])
+pipeCV.fit(X1, Ysigma)
+tuned_lasso = pipeCV.named_steps['lasso']
+
+print('The optimal value of lambda is:',tuned_lasso.alpha_)
+```
+
+```{python}
+#Fit a path of Lasso regressions and extract lambdas as well cause these are generated automtically
+# for the Lasso model case
+lambdas, soln_array = skl.Lasso.path(Xsigma,Ysigma,l1_ratio=1,n_alphas=100)[:2]
+soln_path = pd.DataFrame(soln_array.T,columns=D.columns,index=-np.log(lambdas))
+```
+
+```{python}
+lassoCV_fig, ax = subplots(figsize=(8,8))
+ax.errorbar(-np.log(tuned_lasso.alphas_),
+            tuned_lasso.mse_path_.mean(1),
+            yerr=tuned_lasso.mse_path_.std(1) / np.sqrt(K))
+ax.axvline(-np.log(tuned_lasso.alpha_), c='k', ls='--')
+ax.set_xlabel('$-\log(\lambda)$', fontsize=20)
+ax.set_ylabel('Cross-validated MSE', fontsize=20);
+```
+
+```{python}
+# Now let's report the corresponding coefficients of the optimal lambda chosen by cross validation
+tuned_lasso.coef_
+```
+
+The best model according to Lasso regression contains the coefficients of $X$, $X^2$, $X^3$, $X^4$ and $X^9$. Notice that results obtained by Lasso are different than those obtained by stepwise or backward selection.<br>
+This was expected as the latter two methods are greedy algorithms and merely find a local subset, which is different for Lasso.
+
+### (f)
+
+```{python}
+X.shape
+```
+
+```{python}
+beta=[6,10]
+Ynew=beta[0]+beta[1]*X**7+epsilon
+```
+
+```{python}
+#Run the forward stepwise selection approach with the same predictors as the previous models
+Ysnew=pd.DataFrame({'Y':Ynew})
+design = MS(Xs).fit(Xs)
+Ysigman = np.array(Ysnew['Y'])
+model=OLS(Ysigman,Xsigma).fit()
+sigma2n = model.scale
+strategy=Stepwise.first_peak(design,direction='forward',max_terms=len(design.terms))
+neg_Cpn = partial(nCp,sigma2n) 
+Y_Cpn= sklearn_selected(OLS,strategy,scoring=neg_Cpn)
+Y_Cpn.fit(Xsigma, Ysigman)
+Y_Cpn.selected_state_
+```
+
+The forward stepwise selection approach recommands the model containing predictor $X^7$ and the intercept as the best one.<br>
+The stepwise selection seucceeded in this case to emulate the true model.
+
+```{python}
+# Let's run the Lasso regrssion
+scaler = StandardScaler(with_mean=True,  with_std=True)
+K = 5
+kfold = skm.KFold(K,random_state=0,shuffle=True)
+lassoCVn = skl.ElasticNetCV(n_alphas=100,l1_ratio=1,cv=kfold)
+pipeCVn = Pipeline(steps=[('scaler', scaler),('lasso', lassoCV)])
+pipeCVn.fit(X1, Ysigman)
+tuned_lasson = pipeCVn.named_steps['lasso']
+
+print('The optimal value of lambda is:',tuned_lasso.alpha_)
+```
+
+```{python}
+tuned_lasson.coef_
+```
+
+## Exercise 9
+
+```{python}
+college=load_data('College')
+```
+
+```{python}
+college.info()
+```
+
+```{python}
+college
+```
+
+The predictors dataframe should contain all the columns except the Apps column dedicated for the output. However, Ridge and Lasso regressions, which will be used later in this exercise entail the normalization of varaibles. Such normalization is handled as far as categorical variables are concerned as it is shown in the lab.
+
+```{python}
+college.Private.astype('category')
+```
+
+### (a)
+
+```{python}
+college_train,college_test = train_test_split(college,test_size=0.5,random_state=0)
+college_train['Private01']=np.where(college_train['Private']=='Yes',1,0)
+college_test['Private01']=np.where(college_test['Private']=='Yes',1,0)
+```
+
+### (b)
+
+```{python}
+design = MS(college.columns.drop(['Apps','Private'])).fit(college)
+X_train = design.transform(college_train)
+y_train=college_train['Apps']
+result=OLS(y_train,X_train).fit()
+result.summary()
+```
+
+```{python}
+design_test=MS(college.columns.drop(['Private','Apps'])).fit(college)
+X_test=design_test.transform(college_test)
+Y_hat=result.predict(X_test)
+MSE_ols=np.mean((Y_hat-college_test['Apps'])**2)
+print('The obtained test error for the least squares linear model is ',MSE_ols)
+```
+
+### (c)
+
+```{python}
+# Choose the optimal lambda for ridge regression on the training set
+K = 10
+kfold = skm.KFold(K,random_state=0,shuffle=True)
+lambdas = 10**np.linspace(8, -2, 100) / college['Apps'].std()
+param_grid = {'ridge__alpha': lambdas}
+ridge = skl.ElasticNet(alpha=lambdas[9], l1_ratio=0)
+scaler = StandardScaler(with_mean=True,  with_std=True)
+pipe = Pipeline(steps=[('scaler', scaler), ('ridge', ridge)])
+grid = skm.GridSearchCV(pipe,param_grid,cv=kfold,scoring='neg_mean_squared_error')
+grid.fit(X_train, y_train)
+grid.best_params_['ridge__alpha']
+```
+
+```{python}
+opt_lambda=grid.best_params_['ridge__alpha']
+```
+
+```{python}
+# Fit the ridge regression
+ridge_opt = skl.ElasticNet(alpha=opt_lambda, l1_ratio=0)
+pipe_ridge = Pipeline(steps=[('scaler', scaler), ('ridge', ridge_opt)])
+result_ridge=pipe_ridge.fit(X_train, y_train)
+```
+
+```{python}
+Y_hat_ridge=result_ridge.predict(X_test)
+MSE_ridge=np.mean((Y_hat_ridge-college_test['Apps'])**2)
+print('The obtained test error for the ridge regression model is ',MSE_ridge)
+```
+
+### (d)
+
+```{python}
+# Choose the optimal lambda for lasso regression on the training set
+param_grid_2 = {'lasso__alpha': lambdas}
+lasso= skl.ElasticNet(alpha=lambdas[9], l1_ratio=1)
+pipe_2 = Pipeline(steps=[('scaler', scaler), ('lasso', lasso)])
+grid_2 = skm.GridSearchCV(pipe_2,param_grid_2,cv=kfold,scoring='neg_mean_squared_error')
+grid_2.fit(X_train, y_train)
+opt_lambda_lasso=grid_2.best_params_['lasso__alpha']
+print('The optimal lmabda chosen for lasso regression is',opt_lambda_lasso )
+```
+
+```{python}
+# Fit the lasso regression
+lasso_opt = skl.ElasticNet(alpha=opt_lambda_lasso, l1_ratio=1)
+pipe_lasso = Pipeline(steps=[('scaler', scaler), ('lasso', lasso_opt)])
+result_lasso=pipe_lasso.fit(X_train, y_train)
+```
+
+```{python}
+Y_hat_lasso=result_lasso.predict(X_test)
+MSE_lasso=np.mean((Y_hat_lasso-college_test['Apps'])**2)
+print('The obtained test error for the ridge regression model is ',MSE_lasso)
+```
+
+```{python}
+tuned_lasso = pipe_lasso.named_steps['lasso']
+```
+
+```{python}
+tuned_lasso.coef_
+```
+
+The number of non zero coefficients is 15.
+
+### (e)
+
+```{python}
+# Choose the number of components M by cross validation
+pca = PCA(n_components=2)
+linreg = skl.LinearRegression()
+param_grid = {'pca__n_components': range(1, 19)}
+pipe_pca=Pipeline(steps=[('scaler', scaler), ('pca', pca),('linreg', linreg)])
+grid = skm.GridSearchCV(pipe_pca,param_grid,cv=kfold,scoring='neg_mean_squared_error')
+pipe_pca.fit(X_train, y_train)
+```
+
+```{python}
+grid.fit(X_train, y_train)
+```
+
+```{python}
+n_comp = param_grid['pca__n_components']
+df=pd.DataFrame({'num_components':n_comp,'CV_MSE':-grid.cv_results_['mean_test_score']})
+M=df['CV_MSE'].argmin(skipna=True)+1
+M
+```
+
+```{python}
+pca_M = PCA(n_components=M)
+linreg = skl.LinearRegression()
+param_grid_M = {'pca_M__n_components': range(1, 19)}
+pipe_pca_M=Pipeline(steps=[('scaler', scaler), ('pca', pca_M),('linreg', linreg)])
+result_pca=pipe_pca_M.fit(X_train, y_train)
+```
+
+The optimal choice for the number of components is 17. The test error for the corresponding is 
+
+```{python}
+Yhat_pca=result_pca.predict(X_test)
+MSE_pca=np.mean((Yhat_pca-college_test['Apps'])**2)
+print('The obtained test error for the pca model is',MSE_pca)
+```
+
+### (f)
+
+```{python}
+#Initialize the fit of PLS model
+pls = PLSRegression(n_components=2,scale=True)
+pls.fit(X_train,y_train)
+```
+
+```{python}
+param_grid = {'n_components':range(1, 19)}
+grid = skm.GridSearchCV(pls,param_grid,cv=kfold,scoring='neg_mean_squared_error')
+grid.fit(X_train, y_train)
+```
+
+```{python}
+n_comp = param_grid['n_components']
+df=pd.DataFrame({'num_components':n_comp,'CV_MSE':-grid.cv_results_['mean_test_score']})
+M=df['CV_MSE'].argmin(skipna=True)+1
+M
+```
+
+The optimal choice for the number of components as fas PLS is concerned is 12.
+
+```{python}
+#Refit the pls model using the optimal number of components
+pls = PLSRegression(n_components=M,scale=True)
+result_pls=pls.fit(X_train,y_train)
+```
+
+```{python}
+Yhat_pls=result_pls.predict(X_test)
+Y_test=np.asarray(college_test['Apps']).reshape(-1,1)
+MSE_pls=np.mean((Yhat_pls-Y_test)**2)
+print('The obtained test error for the pca model is',MSE_pls)
+```
+
+### (g)
+
+```{python}
+# Let's first sum up the obtained results in the previous questions
+results_df=pd.DataFrame({'Models':['OLS','Ridge','Lasso','PCR','PLS'],'Test_MSE':
+                       [MSE_ols,MSE_ridge,MSE_lasso,MSE_pca,MSE_pls]})
+results_df
+```
+
+No model has a better test MSE than multiple linear regression using OLS. Hence, it is the best model.
+
+```{python}
+college['Apps'].mean()
+```
+
+```{python}
+RMSE=np.sqrt(results_df['Test_MSE']/college_test.shape[0])
+RMSE
+```
+
+The RMSE of different models, showing the distance around the mean, is low in comparison with this latter. The best model (i.e the OLS model) yield a means error of +/- 57 applications at most which shows an impressively good fit.
+
+All in all, the models have approximately the same values of RMSE. The maximal variation among those models is $(59.037581-56.568549)/56.568549=4.36$%
+
+## Exercise 10
+
+### (a)
+
+```{python}
+np.random.seed(1)
+X=pd.DataFrame(np.random.normal(size=(1000, 20)))
+column_names=['X'+str(i) for i in range(20)]#Rename the columns because ModelSpec gets confused 
+# when column names are integers
+X.columns=column_names
+```
+
+```{python}
+epsilon=np.random.normal(1000)
+```
+
+```{python}
+beta=np.zeros(20)
+Non_null=[20,15,186,24,659,55,42,789,578,4]
+j=0
+#Let's make half of beta non null
+for i in np.random.choice(range(20), size=10, replace=False):
+    beta[i]=Non_null[j]
+    j+=1
+```
+
+```{python}
+Y=np.matmul(X,beta)+epsilon
+y_df=pd.DataFrame({'Y':Y})
+```
+
+### (b)
+
+```{python}
+df=pd.concat([X,y_df ], axis=1)
+df_train,df_test = train_test_split(df,test_size=900,random_state=0)
+```
+
+### (c)
+
+```{python}
+design = MS(df.columns.drop('Y'))
+```
+
+```{python}
+D = design.fit(df)
+D=D.transform(df_train)
+D = D.drop('intercept', axis=1)#Drop the intercept as the function fit_path used later fits the 
+# intercept separately
+X_train = np.asarray(D)
+Y_train=np.asarray(df_train['Y'])#Beware to check wether the number of dimensions of Y_train is 1
+# cause in the opposite case, the fit_path function used next won't work
+```
+
+```{python}
+if fit_path is None:
+    print("Error: l0bnb module not installed. Cannot run best subset selection.")
+    print("Install with: pip install l0bnb")
+else:
+    path = fit_path(X_train,Y_train,max_nonzeros=X_train.shape[1],intercept=False)
+```
+
+Based on the results of the fit_path we should compare training set MSE for the models with 1, 3, 4, 5, 6, 8, 11, 16 and 20 predictors.<br>
+We can choose among any interation number for every type of model, since the fit_path function does not change the regression coefficients, including the intercept coefficient, when the number of predictors remains the same.
+
+```{python}
+# Initialize variables
+iteration = None
+pred_num = None
+coef_list = None
+MSE = None
+
+if path is not None:
+    iteration=[0,2,4,8,11,19,23,38,39,40]
+    pred_num=[1,2,3,5,6,7,12,18,19,20]
+    coef_list=[]
+    for i in iteration:
+        coef_list.append(path[i]['B'])
+    Yhat=[]
+    for i in range(len(iteration)):
+        Yhat.append(np.matmul(X_train,coef_list[i]))
+    MSE=[]
+    for i in range(len(Yhat)):
+        MSE.append(np.mean((Yhat[i]-Y_train)**2))
+else:
+    print("Cannot proceed: fit_path failed")
+```
+
+```{python}
+if MSE is not None:
+    mse_fig, ax = subplots(figsize=(12,12))
+    ax.bar(pred_num,MSE)
+    ax.set_ylabel('Training MSE')
+    ax.set_xlabel('Number of predictors')
+    ax.set_xticks(np.arange(max(pred_num)+1))
+    ax.annotate('Minimum MSE',(pred_num[np.argmin(MSE)],min(MSE)))
+else:
+    print("Cannot plot: MSE is not available")
+```
+
+The minimal training MSE is indicated for 20 predictors.
+
+### (d)
+
+```{python}
+#ones_test=np.ones(900).reshape(-1,1)
+    X_test=df_test.iloc[:,:-1]
+    Y_test=df_test['Y']
+    Yhat_test=[]
+    for i in range(len(iteration)):
+        Yhat_test.append(np.matmul(X_test,coef_list[i]))
+    MSE_test=[]
+    for i in range(len(Yhat_test)):
+        MSE_test.append(np.mean((Yhat_test[i]-Y_test)**2))
+else:
+    print("Cannot proceed: required variables not available")
+```
+
+```{python}
+if MSE_test is not None:
+    mse_fig1, ax1 = subplots(figsize=(12,12))
+    ax1.bar(pred_num,MSE_test)
+    ax1.set_ylabel('Test MSE')
+    ax1.set_xlabel('Number of predictors')
+    ax1.set_xticks(np.arange(max(pred_num)+1))
+    ax1.annotate('Minimum MSE',(pred_num[np.argmin(MSE_test)],min(MSE_test)))
+else:
+    print("Cannot plot: MSE_test is not available")
+```
+
+### (e)
+
+```{python}
+
+path[4]
+```
+
+### (f)
+
+```{python}
+#| scrolled: true
+if path is not None:
+    coefficients=['Beta'+str(i) for i in range(20)]
+    comparison=pd.DataFrame({'Coef':coefficients,'True model':beta,'Simulated model':path[4]['B']})
+    comparison.set_index('Coef')
+else:
+    print("Cannot proceed: path not available")
+```
+
+```{python}
+if path is not None:
+    y=[]
+    for i in range(len(iteration)):
+        y.append(np.sqrt(np.sum((beta-path[i]['B'])**2)))
+else:
+    print("Cannot proceed: path not available")
+```
+
+```{python}
+fig, ax = subplots(figsize=(12,12))
+ax.bar(pred_num,y)
+ax.set_ylabel('Coefficients erros')
+ax.set_xlabel('Number of predictors')
+ax.set_xticks(np.arange(max(pred_num)+1))
+ax.annotate('Minimum error',(pred_num[np.argmin(y)],min(y)));
+```
+
+The minimum error occurs for the model with 6 predictors, while the best model is obtained with 3 predictors.<br>
+Hence, a better fit of coefficients does not guarantee the lowest test MSE.
+
+## Exercise 11
+
+```{python}
+Boston=load_data('Boston')
+```
+
+```{python}
+Boston.columns
+```
+
+```{python}
+Y=Boston['crim']
+```
+
+```{python}
+df_train,df_test = train_test_split(Boston,test_size=0.5,random_state=0)
+```
+
+```{python}
+#X_train=df_train.iloc[:,1:]
+y_train=df_train['crim']
+```
+
+```{python}
+X_test=df_test.iloc[:,1:]
+y_test=df_test['crim']
+```
+
+```{python}
+Boston.info()
+```
+
+### (a)
+
+```{python}
+# Best subset selection
+design=MS(Boston.columns.drop('crim')).fit(Boston)
+D=design.transform(df_train)
+D = D.drop('intercept', axis=1)
+X_train=np.asarray(D)
+Y_train=np.asarray(y_train)
+path = fit_path(X_train,Y_train,max_nonzeros=X_train.shape[1])
+```
+
+```{python}
+ones=np.ones(X_test.shape[0]).reshape(-1,1)
+a=np.append(X_test,ones,axis=1)
+```
+
+```{python}
+iteration=[0,1,2,4,5]
+pred_num=[1,2,8,11,12]
+coef_list=[]
+for i in iteration:
+    #construct a list of arrays. Each array contains the subsets coefficients 
+    coef_list.append(np.append(path[i]['B'],path[i]['B0']))
+Yhat=[]
+for i in range(len(iteration)):
+    Yhat.append(np.matmul(a,coef_list[i]))
+MSE=[]
+for i in range(len(Yhat)):
+    MSE.append(np.sqrt(np.mean((Yhat[i]-y_test)**2)))
+```
+
+```{python}
+mse_fig, ax = subplots(figsize=(12,12))
+ax.bar(pred_num,MSE)
+ax.set_ylabel('Test MSE')
+ax.set_xlabel('Number of predictors')
+ax.set_xticks(np.arange(max(pred_num)+1))
+ax.annotate('Minimum MSE',(pred_num[np.argmin(MSE)],min(MSE)));
+```
+
+The best subset selection method yields a model with two features.
+
+```{python}
+# Lasso regression
+# Looking for the optimal value of lambda first by cross validation
+design=MS(Boston.columns.drop('crim')).fit(Boston)
+D=design.transform(df_train)
+X_train=np.asarray(D)
+scaler = StandardScaler(with_mean=True,  with_std=True)
+K = 5
+kfold = skm.KFold(K,random_state=0,shuffle=True)
+lassoCV = skl.ElasticNetCV(n_alphas=100,l1_ratio=1,cv=kfold)
+pipeCV = Pipeline(steps=[('scaler', scaler),('lasso', lassoCV)])
+pipeCV.fit(X_train, y_train)
+tuned_lasso = pipeCV.named_steps['lasso']
+
+print('The optimal value of lambda is:',tuned_lasso.alpha_)
+```
+
+```{python}
+tuned_lasso.coef_
+```
+
+```{python}
+X_test=design.transform(df_test)
+Yhat_lasso=tuned_lasso.predict(X_test)
+MSE_lasso=np.sqrt(np.mean((Yhat_lasso-y_test)**2))
+```
+
+```{python}
+# Ridge regression
+# Choose the optimal lambda for ridge regression on the training set
+lambdas = 10**np.linspace(8, -2, 100) / Y.std()
+param_grid = {'ridge__alpha': lambdas}
+ridgeCV = skl.ElasticNetCV(alphas=lambdas, l1_ratio=0,cv=kfold)
+pipe = Pipeline(steps=[('scaler', scaler), ('ridge', ridgeCV)])
+#grid = skm.GridSearchCV(pipe,param_grid,cv=kfold,scoring='neg_mean_squared_error')
+pipe.fit(X_train, y_train)
+```
+
+```{python}
+tuned_ridge = pipe.named_steps['ridge']
+tuned_ridge.alpha_
+```
+
+```{python}
+# Fit the ridge regression
+opt_lambda=tuned_ridge.alpha_
+ridge_opt = skl.ElasticNet(alpha=opt_lambda, l1_ratio=0)
+pipe_ridge = Pipeline(steps=[('scaler', scaler), ('ridge', ridge_opt)])
+result_ridge=pipe_ridge.fit(X_train, y_train)
+```
+
+```{python}
+Y_hat_ridge=result_ridge.predict(X_test)
+MSE_ridge=np.sqrt(np.mean((Y_hat_ridge-y_test)**2))
+```
+
+```{python}
+#PCR regression
+pca = PCA(n_components=2)
+linreg = skl.LinearRegression()
+param_grid = {'pca__n_components': range(1, 13)}
+pipe_pca=Pipeline(steps=[('scaler', scaler), ('pca', pca),('linreg', linreg)])
+grid = skm.GridSearchCV(pipe_pca,param_grid,cv=kfold,scoring='neg_mean_squared_error')
+pipe_pca.fit(X_train, y_train)
+```
+
+```{python}
+grid.fit(X_train, y_train)
+n_comp = param_grid['pca__n_components']
+df=pd.DataFrame({'num_components':n_comp,'CV_MSE':-grid.cv_results_['mean_test_score']})
+M=df['CV_MSE'].argmin(skipna=True)+1
+M
+```
+
+```{python}
+pca_M = PCA(n_components=M)
+linreg = skl.LinearRegression()
+param_grid_M = {'pca_M__n_components': range(1, 13)}
+pipe_pca_M=Pipeline(steps=[('scaler', scaler), ('pca', pca_M),('linreg', linreg)])
+result_pca=pipe_pca_M.fit(X_train, y_train)
+```
+
+```{python}
+Yhat_pca=result_pca.predict(X_test)
+MSE_pca=np.sqrt(np.mean((Yhat_pca-y_test)**2))
+```
+
+```{python}
+#Let's sum up the obtained results
+df_results=pd.DataFrame({'Method':['Best subset','Lasso','Ridge','PCR'],'Test MSE':
+                         [min(MSE),MSE_lasso,MSE_ridge,MSE_pca]})
+df_results.set_index('Method')
+```
+
+### (b)
+
+Based on the previous comparison of test MSEs, both the ridge regression on full model and the best subset selction are preferred.
+
+### (c)
+
+It is more preferable to choose the model obtained with the best subset selection because it is more interpretable than the Ridge regression.<br>
+The chosen model involves then 2 features.
+
